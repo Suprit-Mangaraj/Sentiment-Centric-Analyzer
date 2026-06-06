@@ -1,0 +1,114 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import re
+
+def preprocess_text(text):
+    """Clean and preprocess text data"""
+    if not isinstance(text, str):
+        return ""
+    text = text.lower()
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    return text
+
+def analyze_clusters(df):
+    """Perform cluster analysis and generate insights"""
+    print("\n" + "="*50)
+    print("Cluster Analysis Report")
+    print("="*50)
+
+    cluster_sizes = df['cluster'].value_counts().sort_index()
+    print("\nCluster Sizes:")
+    print(cluster_sizes)
+
+    sentiment_by_cluster = df.groupby('cluster')['score'].mean()
+    print("\nAverage Rating per Cluster:")
+    print(sentiment_by_cluster.round(2))
+
+    print("\nTop Keywords per Cluster:")
+    generic_words = {'the', 'and', 'i', 'to', 'it', 'is', 'in', 'of', 'this', 'that', 'was'}
+    for cluster in sorted(df['cluster'].unique()):
+        cluster_text = ' '.join(df[df['cluster'] == cluster]['cleaned_review'])
+        words = pd.Series(cluster_text.split())
+        words = words[~words.isin(generic_words)].value_counts().head(5)
+        print(f"Cluster {cluster}: {', '.join(words.index)}")
+
+    print("\nMost Popular Reviews per Cluster (by thumbs up):")
+    for cluster in sorted(df['cluster'].unique()):
+        top_review = df[df['cluster'] == cluster].nlargest(1, 'thumbsUpCount')
+        review_text = top_review['content'].values[0][:100] + "..."
+        print(f"Cluster {cluster}: {review_text} (👍 {top_review['thumbsUpCount'].values[0]}, ⭐ {top_review['score'].values[0]}/5)")
+
+def main():
+    print("="*50)
+    print("Netflix Review Clustering Analyzer")
+    print("="*50)
+
+    file_path = "netflix_reviews_small.csv"
+    df = pd.read_csv(file_path)
+    print(f"\nLoaded {len(df)} reviews")
+
+    df['cleaned_review'] = df['content'].apply(preprocess_text)
+
+    print("\nCreating TF-IDF matrix...")
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
+    tfidf_matrix = vectorizer.fit_transform(df['cleaned_review'])
+
+    print("Reducing dimensions...")
+    svd = TruncatedSVD(n_components=2, random_state=42)
+    reduced_data = svd.fit_transform(tfidf_matrix)
+
+    print("\nFinding optimal clusters...")
+    silhouette_scores = []
+    k_values = range(2, 6)
+
+    for k in k_values:
+        print(f"Testing K={k}...", end=" ", flush=True)
+        kmeans = KMeans(n_clusters=k, random_state=42)
+        labels = kmeans.fit_predict(reduced_data)
+        score = silhouette_score(reduced_data, labels)
+        silhouette_scores.append(score)
+        print(f"Score = {score:.3f}")
+
+    best_k = k_values[np.argmax(silhouette_scores)]
+    print(f"\nOptimal cluster count: {best_k}")
+
+    kmeans = KMeans(n_clusters=best_k, random_state=42)
+    df['cluster'] = kmeans.fit_predict(reduced_data)
+
+    analyze_clusters(df)
+
+    print("\nGenerating cluster visualization...")
+    plt.figure(figsize=(12, 8))
+
+    scatter = sns.scatterplot(
+        x=reduced_data[:, 0],
+        y=reduced_data[:, 1],
+        hue=df['cluster'],
+        palette='viridis',
+        alpha=0.6,
+        s=10
+    )
+
+    plt.title(f'Netflix Review Clusters (n={len(df)})', fontsize=16)
+    plt.xlabel('SVD Component 1', fontsize=12)
+    plt.ylabel('SVD Component 2', fontsize=12)
+    plt.legend(title='Cluster', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    plt.tight_layout()
+    plt.savefig('netflix_clusters.png', dpi=300, bbox_inches='tight')
+    print("Saved cluster visualization: 'netflix_clusters.png'")
+
+    output_file = 'netflix_analyzed_reviews.csv'
+    df.to_csv(output_file, index=False)
+    print(f"\nResults saved to '{output_file}'")
+
+    print("\nAnalysis complete!")
+
+if __name__ == "__main__":
+    main()
